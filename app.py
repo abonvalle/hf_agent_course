@@ -10,10 +10,23 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain.tools import Tool
 import logging
-from tools import DuckDuckGoTool, YouTubeTool, ExcelTool, FileTool
+from tools import (
+    multiply,
+    add,
+    subtract,
+    divide,
+    modulus,
+    wiki_search,
+    web_search,
+    arvix_search,
+    youtube_transcript,
+    excel_tool,
+    file_tool,
+)
 from agent import Agent
 import mimetypes
 import tempfile
+
 
 load_dotenv()
 
@@ -45,40 +58,22 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             prompt = f.read()
     except Exception:
         prompt = ""
-    duck_tool = DuckDuckGoTool(max_results=3)
-    youtube_tool = YouTubeTool()
-    excel_tool = ExcelTool()
-    file_tool = FileTool(excel_tool=excel_tool)
     api_wrapper = WikipediaAPIWrapper(
         wiki_client="", top_k_results=1, doc_content_chars_max=100
     )
     wiki_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
     tools = [
-        Tool(
-            name="duckduckgo_search",
-            func=duck_tool.invoke,
-            description=duck_tool.description,
-        ),
-        Tool(
-            name=youtube_tool.name,
-            func=youtube_tool.invoke,
-            description=youtube_tool.description,
-        ),
-        Tool(
-            name=excel_tool.name,
-            func=excel_tool.invoke,
-            description=excel_tool.description,
-        ),
-        Tool(
-            name=file_tool.name,
-            func=file_tool.invoke,
-            description=file_tool.description,
-        ),
-        Tool(
-            name=wiki_tool.name,
-            func=wiki_tool.invoke,
-            description=wiki_tool.description,
-        ),
+        multiply,
+        add,
+        subtract,
+        divide,
+        modulus,
+        wiki_search,
+        web_search,
+        arvix_search,
+        youtube_transcript,
+        excel_tool,
+        file_tool,
     ]
     model = ChatOpenAI(model="gpt-4-turbo")
     agent = Agent(model, tools, system=prompt)

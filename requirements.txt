@@ -11,3 +11,5 @@ langchain-openai
 langchain-community
 duckduckgo_search
 youtube-transcript-api
+tavily-python
+wikipedia
