@@ -1,196 +1,249 @@
 import os
 import gradio as gr
 import requests
-import inspect
 import pandas as pd
+from dotenv import load_dotenv
 
-# (Keep Constants as is)
+from langchain_community.tools import WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
+from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain.tools import Tool
+import logging
+from tools import DuckDuckGoTool, YouTubeTool, ExcelTool, FileTool
+from agent import Agent
+import mimetypes
+import tempfile
+
+load_dotenv()
+
 # --- Constants ---
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
+client = OpenAI()
+logging.basicConfig(level=logging.INFO)
 
-# --- Basic Agent Definition ---
-# ----- THIS IS WERE YOU CAN BUILD WHAT YOU WANT ------
-class BasicAgent:
-    def __init__(self):
-        print("BasicAgent initialized.")
-    def __call__(self, question: str) -> str:
-        print(f"Agent received question (first 50 chars): {question[:50]}...")
-        fixed_answer = "This is a default answer."
-        print(f"Agent returning fixed answer: {fixed_answer}")
-        return fixed_answer
+logger = logging.getLogger(__name__)
 
-def run_and_submit_all( profile: gr.OAuthProfile | None):
-    """
-    Fetches all questions, runs the BasicAgent on them, submits all answers,
-    and displays the results.
-    """
-    # --- Determine HF Space Runtime URL and Repo URL ---
-    space_id = os.getenv("SPACE_ID") # Get the SPACE_ID for sending link to the code
+# --- run_and_submit_all unchanged except instantiating Agent above ---
 
+
+def run_and_submit_all(profile: gr.OAuthProfile | None):
+    space_id = os.getenv("SPACE_ID")
     if profile:
-        username= f"{profile.username}"
-        print(f"User logged in: {username}")
+        username = profile.username
     else:
-        print("User not logged in.")
         return "Please Login to Hugging Face with the button.", None
 
     api_url = DEFAULT_API_URL
     questions_url = f"{api_url}/questions"
     submit_url = f"{api_url}/submit"
+    files_url = f"{api_url}/files"
 
-    # 1. Instantiate Agent ( modify this part to create your agent)
+    # Instantiate Agent and Tools
     try:
-        agent = BasicAgent()
-    except Exception as e:
-        print(f"Error instantiating agent: {e}")
-        return f"Error initializing agent: {e}", None
-    # In the case of an app running as a hugging Face space, this link points toward your codebase ( usefull for others so please keep it public)
-    agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"
-    print(agent_code)
+        with open("system_prompt.txt", "r") as f:
+            prompt = f.read()
+    except Exception:
+        prompt = ""
+    duck_tool = DuckDuckGoTool(max_results=3)
+    youtube_tool = YouTubeTool()
+    excel_tool = ExcelTool()
+    file_tool = FileTool(excel_tool=excel_tool)
+    api_wrapper = WikipediaAPIWrapper(
+        wiki_client="", top_k_results=1, doc_content_chars_max=100
+    )
+    wiki_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
+    tools = [
+        Tool(
+            name="duckduckgo_search",
+            func=duck_tool.invoke,
+            description=duck_tool.description,
+        ),
+        Tool(
+            name=youtube_tool.name,
+            func=youtube_tool.invoke,
+            description=youtube_tool.description,
+        ),
+        Tool(
+            name=excel_tool.name,
+            func=excel_tool.invoke,
+            description=excel_tool.description,
+        ),
+        Tool(
+            name=file_tool.name,
+            func=file_tool.invoke,
+            description=file_tool.description,
+        ),
+        Tool(
+            name=wiki_tool.name,
+            func=wiki_tool.invoke,
+            description=wiki_tool.description,
+        ),
+    ]
+    model = ChatOpenAI(model="gpt-4-turbo")
+    agent = Agent(model, tools, system=prompt)
 
-    # 2. Fetch Questions
-    print(f"Fetching questions from: {questions_url}")
+    agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"
+    # Fetch questions
     try:
         response = requests.get(questions_url, timeout=15)
         response.raise_for_status()
         questions_data = response.json()
-        if not questions_data:
-             print("Fetched questions list is empty.")
-             return "Fetched questions list is empty or invalid format.", None
-        print(f"Fetched {len(questions_data)} questions.")
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching questions: {e}")
-        return f"Error fetching questions: {e}", None
-    except requests.exceptions.JSONDecodeError as e:
-         print(f"Error decoding JSON response from questions endpoint: {e}")
-         print(f"Response text: {response.text[:500]}")
-         return f"Error decoding server response for questions: {e}", None
     except Exception as e:
-        print(f"An unexpected error occurred fetching questions: {e}")
-        return f"An unexpected error occurred fetching questions: {e}", None
+        return f"Error fetching questions: {e}", None
 
-    # 3. Run your Agent
     results_log = []
     answers_payload = []
-    print(f"Running agent on {len(questions_data)} questions...")
-    for item in questions_data:
+
+    # Directory to store downloaded files
+    temp_base = tempfile.gettempdir()
+    download_dir = os.path.join(temp_base, "agent_files")
+    os.makedirs(download_dir, exist_ok=True)
+
+    for item in questions_data or []:
         task_id = item.get("task_id")
         question_text = item.get("question")
         if not task_id or question_text is None:
-            print(f"Skipping item with missing task_id or question: {item}")
             continue
+
+        # 1. Download associated file, if available
+        local_path = None
+        file_url = f"{files_url}/{task_id}"
         try:
-            submitted_answer = agent(question_text)
-            answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
-            results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": submitted_answer})
+            resp = requests.get(file_url, timeout=15)
+            if resp.status_code == 200 and resp.content:
+                # Determine extension:
+                # Try from URL first:
+                parsed_ext = None
+                # If URL ends with e.g. .xlsx, .mp3, etc.
+                path_lower = file_url.lower()
+                for ext in [
+                    ".xlsx",
+                    ".xls",
+                    ".py",
+                    ".mp3",
+                    ".wav",
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".csv",
+                    ".txt",
+                ]:
+                    if path_lower.endswith(ext):
+                        parsed_ext = ext
+                        break
+                # Otherwise, try Content-Type header
+                if not parsed_ext:
+                    ct = resp.headers.get("Content-Type", "")
+                    ext_guess = mimetypes.guess_extension(ct.split(";")[0].strip())
+                    if ext_guess:
+                        parsed_ext = ext_guess
+                # Default fallback
+                if not parsed_ext:
+                    parsed_ext = ""  # no extension
+                # Build local filename
+                filename = f"{task_id}{parsed_ext}"
+                local_path = os.path.join(download_dir, filename)
+                # Save file
+                with open(local_path, "wb") as f:
+                    f.write(resp.content)
+                logger.info(f"Downloaded file for task {task_id} to {local_path}")
+            else:
+                logger.info(
+                    f"No file or empty content for task {task_id} (status {resp.status_code})"
+                )
         except Exception as e:
-             print(f"Error running agent on task {task_id}: {e}")
-             results_log.append({"Task ID": task_id, "Question": question_text, "Submitted Answer": f"AGENT ERROR: {e}"})
+            logger.warning(
+                f"Failed to download file for task {task_id} from {file_url}: {e}"
+            )
+            local_path = None
+
+        # 2. Call the agent, passing the local_path so it knows a file is available
+        try:
+            # Modify Agent.__call__ signature to accept optional file_path
+            ans = agent(question_text, local_path)
+            answers_payload.append({"task_id": task_id, "submitted_answer": ans})
+            results_log.append(
+                {
+                    "Task ID": task_id,
+                    "Question": question_text,
+                    "File Path": local_path or "",
+                    "Submitted Answer": ans,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Agent error on task {task_id}: {e}", exc_info=True)
+            results_log.append(
+                {
+                    "Task ID": task_id,
+                    "Question": question_text,
+                    "File Path": local_path or "",
+                    "Submitted Answer": f"AGENT ERROR: {e}",
+                }
+            )
 
     if not answers_payload:
-        print("Agent did not produce any answers to submit.")
         return "Agent did not produce any answers to submit.", pd.DataFrame(results_log)
 
-    # 4. Prepare Submission 
-    submission_data = {"username": username.strip(), "agent_code": agent_code, "answers": answers_payload}
-    status_update = f"Agent finished. Submitting {len(answers_payload)} answers for user '{username}'..."
-    print(status_update)
-
-    # 5. Submit
-    print(f"Submitting {len(answers_payload)} answers to: {submit_url}")
+    submission_data = {
+        "username": username.strip(),
+        "agent_code": agent_code,
+        "answers": answers_payload,
+    }
+    # Submission as before...
     try:
-        response = requests.post(submit_url, json=submission_data, timeout=60)
-        response.raise_for_status()
-        result_data = response.json()
+        resp2 = requests.post(submit_url, json=submission_data, timeout=60)
+        resp2.raise_for_status()
+        data = resp2.json()
         final_status = (
             f"Submission Successful!\n"
-            f"User: {result_data.get('username')}\n"
-            f"Overall Score: {result_data.get('score', 'N/A')}% "
-            f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
-            f"Message: {result_data.get('message', 'No message received.')}"
+            f"User: {data.get('username')}\n"
+            f"Overall Score: {data.get('score', 'N/A')}% "
+            f"({data.get('correct_count', '?')}/{data.get('total_attempted', '?')} correct)\n"
+            f"Message: {data.get('message', 'No message received.')}"
         )
-        print("Submission successful.")
-        results_df = pd.DataFrame(results_log)
-        return final_status, results_df
+        return final_status, pd.DataFrame(results_log)
     except requests.exceptions.HTTPError as e:
-        error_detail = f"Server responded with status {e.response.status_code}."
+        detail = f"Server responded with status {e.response.status_code}."
         try:
-            error_json = e.response.json()
-            error_detail += f" Detail: {error_json.get('detail', e.response.text)}"
-        except requests.exceptions.JSONDecodeError:
-            error_detail += f" Response: {e.response.text[:500]}"
-        status_message = f"Submission Failed: {error_detail}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
-    except requests.exceptions.Timeout:
-        status_message = "Submission Failed: The request timed out."
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
-    except requests.exceptions.RequestException as e:
-        status_message = f"Submission Failed: Network error - {e}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
+            jd = e.response.json()
+            detail += f" Detail: {jd.get('detail', e.response.text)}"
+        except Exception:
+            detail += f" Response: {e.response.text[:500]}"
+        return f"Submission Failed: {detail}", pd.DataFrame(results_log)
     except Exception as e:
-        status_message = f"An unexpected error occurred during submission: {e}"
-        print(status_message)
-        results_df = pd.DataFrame(results_log)
-        return status_message, results_df
+        return f"Submission Failed: {e}", pd.DataFrame(results_log)
 
 
-# --- Build Gradio Interface using Blocks ---
+# --- Gradio Interface (unchanged) ---
 with gr.Blocks() as demo:
     gr.Markdown("# Basic Agent Evaluation Runner")
     gr.Markdown(
         """
         **Instructions:**
-
-        1.  Please clone this space, then modify the code to define your agent's logic, the tools, the necessary packages, etc ...
-        2.  Log in to your Hugging Face account using the button below. This uses your HF username for submission.
-        3.  Click 'Run Evaluation & Submit All Answers' to fetch questions, run your agent, submit answers, and see the score.
-
-        ---
-        **Disclaimers:**
-        Once clicking on the "submit button, it can take quite some time ( this is the time for the agent to go through all the questions).
-        This space provides a basic setup and is intentionally sub-optimal to encourage you to develop your own, more robust solution. For instance for the delay process of the submit button, a solution could be to cache the answers and submit in a seperate action or even to answer the questions in async.
+        1. Clone and modify the code to define your agent's logic/tools.
+        2. Log in to Hugging Face.
+        3. Click 'Run Evaluation & Submit All Answers'.
         """
     )
-
     gr.LoginButton()
-
     run_button = gr.Button("Run Evaluation & Submit All Answers")
-
-    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False)
-    # Removed max_rows=10 from DataFrame constructor
-    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True)
-
-    run_button.click(
-        fn=run_and_submit_all,
-        outputs=[status_output, results_table]
+    status_output = gr.Textbox(
+        label="Run Status / Submission Result", lines=5, interactive=False
     )
+    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True)
+    run_button.click(fn=run_and_submit_all, outputs=[status_output, results_table])
 
 if __name__ == "__main__":
-    print("\n" + "-"*30 + " App Starting " + "-"*30)
-    # Check for SPACE_HOST and SPACE_ID at startup for information
-    space_host_startup = os.getenv("SPACE_HOST")
-    space_id_startup = os.getenv("SPACE_ID") # Get SPACE_ID at startup
-
-    if space_host_startup:
-        print(f"✅ SPACE_HOST found: {space_host_startup}")
-        print(f"   Runtime URL should be: https://{space_host_startup}.hf.space")
+    space_host = os.getenv("SPACE_HOST")
+    space_id = os.getenv("SPACE_ID")
+    if space_host:
+        print(f"✅ SPACE_HOST found: {space_host}")
     else:
-        print("ℹ️  SPACE_HOST environment variable not found (running locally?).")
-
-    if space_id_startup: # Print repo URLs if SPACE_ID is found
-        print(f"✅ SPACE_ID found: {space_id_startup}")
-        print(f"   Repo URL: https://huggingface.co/spaces/{space_id_startup}")
-        print(f"   Repo Tree URL: https://huggingface.co/spaces/{space_id_startup}/tree/main")
+        print("ℹ️ SPACE_HOST not found.")
+    if space_id:
+        print(f"✅ SPACE_ID found: {space_id}")
     else:
-        print("ℹ️  SPACE_ID environment variable not found (running locally?). Repo URL cannot be determined.")
-
-    print("-"*(60 + len(" App Starting ")) + "\n")
-
-    print("Launching Gradio Interface for Basic Agent Evaluation...")
+        print("ℹ️ SPACE_ID not found.")
+    print("Launching Gradio Interface...")
     demo.launch(debug=True, share=False)
