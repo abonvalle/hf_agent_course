@@ -4,11 +4,8 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 
-from langchain_community.tools import WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
-from langchain.tools import Tool
 import logging
 from tools import (
     multiply,
@@ -58,10 +55,7 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             prompt = f.read()
     except Exception:
         prompt = ""
-    api_wrapper = WikipediaAPIWrapper(
-        wiki_client="", top_k_results=1, doc_content_chars_max=100
-    )
-    wiki_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
+
     tools = [
         multiply,
         add,
@@ -72,10 +66,9 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
         web_search,
         arvix_search,
         youtube_transcript,
-        excel_tool,
         file_tool,
     ]
-    model = ChatOpenAI(model="gpt-4-turbo")
+    model = ChatOpenAI(model="o3-2025-04-16")
     agent = Agent(model, tools, system=prompt)
 
     agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"

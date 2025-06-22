@@ -6,7 +6,7 @@ from youtube_transcript_api._api import YouTubeTranscriptApi
 import logging
 import os
 import openai
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_community.document_loaders import WikipediaLoader
 from langchain_community.document_loaders import ArxivLoader
 from langchain_core.tools import tool
@@ -93,7 +93,7 @@ def web_search(query: str) -> dict[str, str]:
 
     Args:
         query: The search query."""
-    search_docs = TavilySearchResults(max_results=3).invoke(query=query)
+    search_docs = TavilySearch(k=3).invoke(query)
     formatted_search_docs = "\n\n---\n\n".join(
         [
             f'<Document source="{doc.metadata["source"]}" page="{doc.metadata.get("page", "")}"/>\n{doc.page_content}\n</Document>'
@@ -269,7 +269,7 @@ def python_file_qa(path: str, question: str = "Summarize this file.") -> str:
     )
     try:
         response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="o3-2025-04-16",
             messages=[
                 {
                     "role": "system",
