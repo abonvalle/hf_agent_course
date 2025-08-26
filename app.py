@@ -28,7 +28,7 @@ import tempfile
 load_dotenv()
 
 # --- Constants ---
-DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
+DEFAULT_API_URL = "localhost"  # "https://agents-course-unit4-scoring.hf.space"
 client = OpenAI()
 logging.basicConfig(level=logging.INFO)
 

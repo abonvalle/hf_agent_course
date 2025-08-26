@@ -1,0 +1,37 @@
+[project]
+name = "final-assignment-template"
+version = "0.1.0"
+description = "Template for Final Assignment with AI Agent"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "gradio",
+    "requests",
+    "openai",
+    "pandas",
+    "python-dotenv",
+    "gradio[oauth]",
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "langchain-community",
+    "youtube-transcript-api",
+    "langchain-tavily",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
