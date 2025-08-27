@@ -41,9 +41,31 @@ test: ## Run tests
 pip-install: ## Install using pip (legacy)
 	pip install -r requirements.txt
 
-# Docker commands (if needed)
+# Docker commands
 docker-build: ## Build Docker image
-	docker build -t final-assignment-template .
+	docker build -t final-assignment-template:latest .
 
-docker-run: ## Run in Docker container
-	docker run -p 7860:7860 final-assignment-template
+docker-run: ## Run Docker container
+	docker run -d --name final-assignment-app -p 7860:7860 --env-file .env -v "$(PWD):/app" final-assignment-template:latest
+
+docker-up: ## Start with docker-compose
+	docker compose up -d
+
+docker-down: ## Stop docker-compose
+	docker compose down
+
+docker-stop: ## Stop Docker containers
+	docker stop final-assignment-app || true
+	docker compose down || true
+
+docker-clean: ## Clean up Docker resources
+	docker stop final-assignment-app || true
+	docker rm final-assignment-app || true
+	docker compose down || true
+	docker rmi final-assignment-template:latest || true
+
+docker-logs: ## Show Docker container logs
+	docker logs final-assignment-app || docker compose logs
+
+docker-shell: ## Open shell in Docker container
+	docker exec -it final-assignment-app /bin/bash

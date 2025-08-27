@@ -83,3 +83,11 @@ dmypy.json
 temp/
 downloads/
 .gitattributes
+
+# Docker
+.env.docker.local
+docker-volumes/
+
+# Gradio
+gradio_cached_examples/
+flagged/

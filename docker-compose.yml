@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "7860:7860"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
+    restart: unless-stopped

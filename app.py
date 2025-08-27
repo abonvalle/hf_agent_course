@@ -17,18 +17,18 @@ from tools import (
     web_search,
     arvix_search,
     youtube_transcript,
-    excel_tool,
     file_tool,
 )
 from agent import Agent
 import mimetypes
 import tempfile
+from typing import Any, Dict, List
 
 
 load_dotenv()
 
 # --- Constants ---
-DEFAULT_API_URL = "localhost"  # "https://agents-course-unit4-scoring.hf.space"
+DEFAULT_API_URL = "localhost" #os.getenv("DEFAULT_API_URL", "https://agents-course-unit4-scoring.hf.space")
 client = OpenAI()
 logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 def run_and_submit_all(profile: gr.OAuthProfile | None):
     space_id = os.getenv("SPACE_ID")
+    space_host = os.getenv("SPACE_HOST")
     if profile:
         username = profile.username
     else:
@@ -71,19 +72,23 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
     model = ChatOpenAI(model="o3-2025-04-16")
     agent = Agent(model, tools, system=prompt)
 
-    agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"
+    agent_code = f"https://huggingface.co/spaces/{space_host}/{space_id}/tree/main"
     # Fetch questions
+    questions_data: List[Dict[str, Any]] = []
     try:
         response = requests.get(questions_url, timeout=15)
         response.raise_for_status()
-        questions_data = response.json()
+        questions_data_raw = response.json()
+        if not isinstance(questions_data_raw, list):
+            return "Error: questions endpoint did not return a list.", None
+        questions_data = [q for q in questions_data_raw if isinstance(q, dict)]
     except Exception as e:
         return f"Error fetching questions: {e}", None
 
     results_log = []
     answers_payload = []
 
-    # Directory to store downloaded files
+    # Prepare download directory once
     temp_base = tempfile.gettempdir()
     download_dir = os.path.join(temp_base, "agent_files")
     os.makedirs(download_dir, exist_ok=True)
@@ -101,9 +106,7 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             resp = requests.get(file_url, timeout=15)
             if resp.status_code == 200 and resp.content:
                 # Determine extension:
-                # Try from URL first:
                 parsed_ext = None
-                # If URL ends with e.g. .xlsx, .mp3, etc.
                 path_lower = file_url.lower()
                 for ext in [
                     ".xlsx",
@@ -120,19 +123,15 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
                     if path_lower.endswith(ext):
                         parsed_ext = ext
                         break
-                # Otherwise, try Content-Type header
                 if not parsed_ext:
                     ct = resp.headers.get("Content-Type", "")
                     ext_guess = mimetypes.guess_extension(ct.split(";")[0].strip())
                     if ext_guess:
                         parsed_ext = ext_guess
-                # Default fallback
                 if not parsed_ext:
-                    parsed_ext = ""  # no extension
-                # Build local filename
+                    parsed_ext = ""
                 filename = f"{task_id}{parsed_ext}"
                 local_path = os.path.join(download_dir, filename)
-                # Save file
                 with open(local_path, "wb") as f:
                     f.write(resp.content)
                 logger.info(f"Downloaded file for task {task_id} to {local_path}")
@@ -148,7 +147,6 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
 
         # 2. Call the agent, passing the local_path so it knows a file is available
         try:
-            # Modify Agent.__call__ signature to accept optional file_path
             ans = agent(question_text, local_path)
             answers_payload.append({"task_id": task_id, "submitted_answer": ans})
             results_log.append(
@@ -233,5 +231,16 @@ if __name__ == "__main__":
         print(f"✅ SPACE_ID found: {space_id}")
     else:
         print("ℹ️ SPACE_ID not found.")
+    
+    # Configure for Docker/deployment
+    server_name = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    share_gradio = os.getenv("GRADIO_SHARE", "false").lower() == "true"
+    
     print("Launching Gradio Interface...")
-    demo.launch(debug=True, share=False)
+    demo.launch(
+        server_name=server_name,
+        server_port=server_port,
+        share=share_gradio,
+        debug=True
+    )

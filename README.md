@@ -54,8 +54,9 @@ This project uses [uv](https://docs.astral.sh/uv/) for fast and reliable Python 
    uv run python app.py
    ```
 
-### Running the Application
+## Running the Application
 
+### With uv (Recommended)
 ```bash
 # Run the main application
 uv run python app.py
@@ -63,6 +64,17 @@ uv run python app.py
 # Run with specific Python interpreter
 uv run --python 3.12 python app.py
 ```
+
+### With Docker (Alternative)
+```bash
+# Quick start with Docker Compose
+cp .env.docker .env  # Configure your API keys
+docker-compose up -d
+
+# Access at http://localhost:7860
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker documentation.
 
 ### Adding Dependencies
 
